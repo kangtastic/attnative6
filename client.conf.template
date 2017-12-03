@@ -1,0 +1,49 @@
+# File: __CONFPATH__/client.conf
+# Description: Configuration file for dibbler client
+# Generated on: __DATE__
+
+# NOTE: In testing, the server cheerfully ignored literally everything but pd,
+#     ia, and duid-type. But what the hey, might as well match behavior.
+
+# 7=Info, 8=Debug
+log-level 7
+
+# Allow starting client even on an inactive interface.
+inactive-mode
+
+# Send a DUID-EN.
+# Syntax: duid-type duid-en <enterprise-number> <identifier (variable length)>
+#             <enterprise-number>: decimal, e.g. 1234
+#             <identifier>: equipment identifier in hex, e.g. 0x12345678
+#         (see also http://www.iana.org/assignments/enterprise-numbers.html)
+duid-type duid-en 3561 __DUIDEN__
+
+# Inform server that client accepts reconfiguration.
+reconfigure-accept 1
+
+# Client won't properly split a /60 prefix delegation; do it ourselves.
+downlink-prefix-ifaces "none"
+script "__HLPPATH__/pdsplit.sh"
+
+# Start client on WAN interface.
+iface __WAN__ {
+    T1 0
+    T2 0
+
+# Ask for PD (prefix delegation).
+    pd {
+        prefix :: / 64 {
+            preferred-lifetime 21600
+            valid-lifetime 86400
+        }
+    }
+
+# Ask for IA_NA (non-temporary unicast IPv6 address).
+    ia
+
+# ORO (Option Request Option) suboptions.
+    option dns-server
+    option 82 string
+    option 83 string
+}
+

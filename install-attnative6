@@ -1,0 +1,151 @@
+#!/bin/sh
+# File: install-attnative6
+# Description: Script to generate and install a configuration file for the
+#    dibbler DHCPv6 client and a helper script, intended for use on routers
+#    connected to u-Verse Fiber with the Residential Gateway bypassed.
+#    Results in native IPv6 via a DHCPv6 IA_NA and PD assignment.
+# Requires: dibbler-client, template files in current directory
+# Template file names: client.conf.template, pdsplit.sh.template
+err() { echo "$*" >&2; }
+die() { err "EXIT WITH ERROR: $*"; exit 1; }
+# this awk one-liner should be fully portable
+ascii2hex() { echo "$*" | awk 'BEGIN{for(n=0;n<256;n++)ord[sprintf("%c",n)]=n}{len=split($0,c,"");for(i=1;i<=len;i++)printf("%X",ord[c[i]])}'; }
+
+conftmpl=client.conf.template
+hlptmpl=pdsplit.sh.template
+
+[ -x "$(which dibbler-client)" ] || die "dibbler-client not installed"
+[ "$(whoami)" = "root" ] || err "WARNING: NOT RUNNING AS ROOT"
+for f in $conftmpl $hlptmpl; do	[ -f $f ] || die "$f not found in current directory"; done
+
+cat << EOF
+This script generates and installs configuration files for the dibbler DHCPv6
+client that configure it to receive an IA_NA (semi-permanent public IPv6
+address) and a PD (Prefix Delegation).
+
+This allows native dual-stack IPv6 connectivity on a router connected to a
+u-Verse Fiber ONT, either directly or via a managed switch, bypassing an RG.
+
+See https://is.gd/wokixe for more details.
+
+NOTE: This script is best run BEFORE STARTING dibbler-client FOR THE FIRST TIME.
+dibbler seems to ignore certain changes to its configuration otherwise.
+
+Step 1) Interfaces
+Enter the names of the WAN-facing and LAN-facing interfaces on this system.
+If bypassing using an EAP proxy, the WAN-facing interface is probably named
+something like "eth0.0".
+
+EOF
+while read -p "  WAN interface name: " wan; do [ -n "$wan" ] && break; done
+while read -p "  LAN interface name: " lan; do [ -n "$lan" ] && break; done
+
+cat << EOF
+
+Step 2) RG Information
+Enter your Residential Gateway's manufacturer and serial number.
+From this we can reconstruct the DUID-EN it sends during DHCPv6 requests.
+
+EOF
+while read -p "  Manufacturer [1=Pace, 2=Motorola]: " mfg; do
+	([ "$mfg" = "1" ] || [ "$mfg" = "2" ]) && break
+done
+while read -p "  Serial number: " serial; do [ -n "$serial" ] && break; done
+
+cat << EOF
+
+Step 3) Paths
+By default, dibbler expects its configuration files to be in "/etc/dibbler",
+and writes its logs to "/var/log/dibbler".
+
+We will generate a configuration file for dibbler named "client.conf" and a
+helper script named "pdsplit.sh". These will go in "/etc/dibbler". The helper
+script will also save its own logs to "/var/log/dibbler".
+
+If you would like to change where the generated files will go, or where the
+helper script will save its logs, you can do so now.
+
+Just press ENTER to accept the defaults.
+
+EOF
+read -p "  dibbler config directory [default=/etc/dibbler]: " confpath
+read -p "  Helper script directory [default=/etc/dibbler]: " hlppath
+read -p "  Helper script log directory [default=/var/log/dibbler]: " logpath
+[ -z "$confpath" ] && confpath=/etc/dibbler
+[ -z "$hlppath" ] && hlppath=/etc/dibbler
+[ -z "$logpath" ] && logpath=/var/log/dibbler
+
+cat << EOF
+
+Step 4) Confirm
+Please confirm that the information below is correct, or the script will quit.
+
+EOF
+echo "    WAN interface: $wan"
+echo "    LAN interface: $lan"
+echo
+echo "    RG manufacturer: $([ $mfg = 1 ] && echo Pace || echo Motorola)"
+echo "    RG serial number: $serial"
+echo
+echo "    dibbler configuration file directory: $confpath"
+echo "    Helper script directory: $hlppath"
+echo "    Helper script log directory: $logpath"
+echo
+read -p "  Enter 'yes' exactly to confirm: " ans
+[ "$ans" = "yes" ] || die "User canceled"
+
+cat << EOF
+
+Step 5) Generate and install
+We will try to generate a new configuration for the dibbler client, close any
+running instances of the client, and replace dibbler's current configuration.
+
+EOF
+[ "$mfg" = "1" ] && mfg="00D09E" || mfg="001E46"
+duiden=$(ascii2hex "$mfg-$serial"); duiden="0x$duiden"
+
+for f in $conftmpl $hlptmpl; do
+	of=$(echo $f | sed 's|.template||')
+	cp $f $of &&
+	sed -e "s|__DATE__|$(date -R)|" -i.bak $of &&
+	sed -e "s|__WAN__|$wan|" -i.bak $of &&
+	sed -e "s|__LAN__|$lan|" -i.bak $of &&
+	sed -e "s|__DUIDEN__|$duiden|" -i.bak $of &&
+	sed -e "s|__CONFPATH__|$confpath|" -i.bak $of &&
+	sed -e "s|__HLPPATH__|$hlppath|" -i.bak $of &&
+	sed -e "s|__LOGPATH__|$logpath|" -i.bak $of &&
+	rm $of.bak &&
+	echo "$of generated." || die "$of could not be generated."
+done
+echo
+
+if [ -n "$(pgrep dibbler-client)" ]; then
+	echo "dibbler client is running, killing it now."
+	killall dibbler-client || err "Could not kill dibbler client!"
+	echo
+fi
+if [ -f /var/lib/dibbler/client-duid ]; then
+	echo "Would you like to clear dibbler client's current configuration?"
+	echo "It seems that you have run it before, so this is probably necessary."
+	read -p "  Enter 'yes' exactly to confirm: " ans
+	if [ "$ans" = "yes" ]; then
+		rm -f /var/lib/dibbler/client* || err "Failed, are you root?"
+	fi
+	echo
+fi
+conf=$(echo $conftmpl | sed 's|.template||')
+echo "Would you like to install $conf into $confpath?"
+read -p "  Enter 'yes' exactly to confirm: " ans
+if [ "$ans" = "yes" ]; then
+	mkdir -p "$confpath" && mv $conf "$confpath" || err "Failed, are you root?"
+fi
+echo
+hlp=$(echo $hlptmpl | sed 's|.template||')
+chmod +x $hlp
+echo "Would you like to install $hlp into $hlppath?"
+read -p "  Enter 'yes' exactly to confirm: " ans
+if [ "$ans" = "yes" ]; then
+	mkdir -p "$ hlppath" && mv $hlp "$hlppath" || err "Failed, are you root?"
+fi
+echo
+echo "Finished."
