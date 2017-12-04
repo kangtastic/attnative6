@@ -85,7 +85,7 @@ BSDudes need to compile and install the client and can run the generator script,
    * If you didn't refuse, don't worry, the installer script can remedy your error later.
 3. (Optional, highly recommended) Also get and install `rdisc6`, which is contained in a package named `ndisc6`.
 ### Installation
-1. Clone the repository, or download the first release and untar it.
+1. Clone the repository, or [download the latest release](https://github.com/kangtastic/attnative6/releases/) and untar/unzip it.
 2. `cd` to where the release ended up on your system, run **`./install-attnative6`** as root, and answer the questions.
    * Note that the generated files will make `dibbler-client` start only on the WAN interface you specified, and will only assign the first /64 in the delegated prefix to the LAN interface. If this is not what you want, edit the appropriate files later. Both of them are probably in the same place, after all...
 ### Usage
