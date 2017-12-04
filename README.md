@@ -90,11 +90,11 @@ BSDudes need to compile and install the client and can run the generator script,
    * Note that the generated files will make `dibbler-client` start only on the WAN interface you specified, and will only assign the first /64 in the delegated prefix to the LAN interface. If this is not what you want, edit the appropriate files later. Both of them are probably in the same place, after all...
 ### Usage
 1. Once the files were correctly generated and installed, start the client with most likely, `systemctl start dibbler-client` as root.
-   * It should go without saying, but if you were using a 6rd tunnel before, stop and remove the tunnel, stop it from being autocreated, rchange your firewall rules if they referenced the tunnel device name, and make any necessary changes to your DNS6, DHCPv6, and Router Advertisement daemon configurations before you start `dibbler-client` for the first time.
+   * It should go without saying, but if you were using a 6rd tunnel before, stop and remove the tunnel, stop it from being autocreated, change your firewall rules if they referenced the tunnel device name, and make any necessary changes to your DNS6, DHCPv6, and Router Advertisement daemon configurations before you start `dibbler-client` for the first time.
 2. Read the log files in `/var/log/dibbler` to verify that the client and helper script are working.
    * If you're running into problems, edit `/etc/dibbler/client.conf` to change the log level to 8, and also to make any other changes there and in the helper script at `/etc/dibbler/pdsplit.sh`.
    * Restart the client with, most likely, `systemctl restart dibbler-client` as root.
-   * To remove everything dibbler-related and start over, run `apt-get purge dibbler-client` and `rm -f /etc/dibbler /var/log/dibbler /var/lib/dibbler`, both as root, then run `install-attnative6` again.
+   * To remove everything dibbler-related and start over, run `apt-get purge dibbler-client` and `rm -f /etc/dibbler /var/log/dibbler /var/lib/dibbler`, both as root, then reinstall the client and run `install-attnative6` again.
 3. Once the client is fully working, make it start at boot with `systemctl enable dibbler-client` as root.
 ---
 Good luck!
