@@ -60,7 +60,7 @@ But it does work. It made beautiful-looking DHCPv6 packets (fine, *datagrams*) a
    * Those duties are for, respectively, the kernel to listen to Router Advertisements on the WAN interface, `radvd` or `dnsmasq`, etc. to send out RAs on the LAN interface, and `radvd` or `dnsmasq`, etc. or a DHCPv6 server to send out the DNS6 information in RAs or DHCPv6 assignments. 
 
 3. Sorry, BSDudes, `dibbler-client` isn't included in BSD or pfSense's package repositories. It builds nicely from the [sources elsewhere on github](https://github.com/tomaszmrugalski/dibbler), though.
-   * Just remember to create `/var/lib/dibbler` and `/etc/dibbler/client.conf.`
+   * Just remember to create at least the `/var/lib/dibbler` directory. Also, write a config file at `/etc/dibbler/client.conf`, which may (start out as) the one you generate with the installer script.
 
 ### Partial solutions, to some of the caveats, to the solution
 #### OK, this is where I get around to talking about the things in this repository.
@@ -82,6 +82,7 @@ BSDudes need to compile and install the client and can run the generator script,
 1. Disable the current DHCPv6 client from running on your WAN interface, if any.
 2. Get and install `dibbler-client` from your Linux distribution's package repository.
    * If the package installer prompts you to ask if you want to start the client during boot, **REFUSE** for now.
+   * If you didn't refuse, don't worry, the installer script can remedy your error later.
 3. (Optional, highly recommended) Also get and install `rdisc6`, which is contained in a package named `ndisc6`.
 ### Installation
 1. Clone the repository, or download the first release and untar it.
