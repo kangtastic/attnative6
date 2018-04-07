@@ -1,4 +1,5 @@
 #!/bin/sh
+################################################################################
 # File: install-attnative6
 # Description: Script to generate and install a configuration file for the
 #    dibbler DHCPv6 client and a helper script, intended for use on routers
@@ -6,204 +7,421 @@
 #    Results in native IPv6 with Prefix Delegation.
 # Requires: dibbler-client, template files in current directory
 # Template file names: client.conf.template, pdsplit.sh.template
-err() { echo "$*" >&2; }
-die() { err "EXIT WITH ERROR: $*"; exit 1; }
+################################################################################
+help() {
+cat << EOF
+Generate, and optionally install, a configuration file and helper script for
+dibbler-client to mimic DHCPv6 behavior of a Motorola NVG599.
+
+Usage: $0 [OPTION]...
+
+All options are optional. Any missing information required for this script to
+run will be queried interactively if not supplied on the command line.
+
+Mandatory arguments to long options are mandatory for short options too.
+
+Help:
+  -h, --help              print this help
+
+Interfaces:
+  -w, --wan=WAN           WAN interface name
+  -l, --lan=LAN           LAN interface name
+
+Residential Gateway:
+  -m, --mfg=MFG           RG manufacturer (either 'pace' or 'motorola')
+  -s, --serial=SERIAL     RG serial number (enter completely and exactly)
+
+Quiet mode:
+  -q, --quiet             accept all defaults below unless explicitly overridden
+                          with (additional) command-line arguments; do not ask
+                          for final approval at summary screen (careful!)
+
+The following options have defaults - they all default to 'no' (except for the
+-path options, which have defaults as shown). However, the user will still be
+asked to review and approve them if -q/--quiet is not specified.
+
+WAN workaround and paths:
+  -b, --bind-wan          bind address from prefix delegation to WAN interface
+                          (workaround enables direct IPv6 connectivity from WAN)
+
+      --conf-path=CPATH   configuration file should be installed to CPATH
+                          (default: '/etc/dibbler')
+      --hlp-path=HPATH    helper script should be installed to HPATH
+                          (default: '/etc/dibbler')
+      --log-path=LPATH    helper script should write its own log to LPATH
+                          (default: '/var/log/dibbler')
+
+Installation:
+  -i, --install           same as both --install-conf and --install-hlp
+
+      --install-conf      install configuration file
+      --install-hlp       install helper script
+
+  -c, --clear-leases      clear any existing dibbler-client lease database
+
+EOF
+}
+### Helpers ###
+err() { echo "${B}$1${N}" >&2; }
+die() { err "EXIT WITH ERROR: $1"; [ "$2" = "y" ] && help; exit 1; }
+ask() {
+  read -p "    ${B}$2:${N} " ans
+  [ -z "$ans" ] && ans="$3"
+  eval $1=\$ans
+}
+confirm() {
+  ask t "Enter 'yes' exactly to confirm [default=no]"
+  [ "$t" = "yes" ] && eval $1=yes || eval $1=no
+}
+checkvars() {
+  ret=0; msg=; tmp=
+  for n in $(seq 1 $#); do
+    vname=$(eval echo \$$n); vval=$(eval echo \$$vname)
+    if [ -n "$vval" ]; then
+      [ -n "$msg" ] && msg="$msg, "; msg="$msg$vname='$vval'"; ret=$(($ret + 1))
+    else
+      [ -n "$tmp" ] && tmp="$tmp, "; tmp="$tmp$vname"
+    fi
+  done
+  [ $ret -gt 0 ] && msg="(got $msg; need $tmp)" && echo $msg; return $ret
+}
 # this awk one-liner should be fully portable
 ascii2hex() { echo "$*" | awk 'BEGIN{for(n=0;n<256;n++)ord[sprintf("%c",n)]=n}{len=split($0,c,"");for(i=1;i<=len;i++)printf("%X",ord[c[i]])}'; }
 
-confirm() {
-  read -p "	Enter 'yes' exactly to confirm: " ans
-  [ "$ans" = "yes" ] && return 0 || return 1
+### Template files ###
+CONFTMPL=client.conf.template
+HLPTMPL=pdsplit.sh.template
+
+### Environment ###
+INSTALLERPATH="$0"
+ALLOWINST=no
+B=$(tput bold)
+U=$(tput smul)
+N=$(tput sgr0)
+
+WAN=
+LAN=
+MFG=
+SERIAL=
+QUIET=no
+BINDWAN=
+CONFPATH=
+HLPPATH=
+LOGPATH=
+INSTC=
+INSTH=
+CLRDB=
+
+### Major parts ###
+printinfo() {
+cat << EOF
+
+${B}${U}attnative6: Native IPv6 on AT&T with dibbler-client${N}
+
+  This installer can generate and install configuration files for the dibbler
+  DHCPv6 client that make it request a global unicast address (a "public",
+  semi-permanent IPv6 address) and a Prefix Delegation (PD) very similarly to an
+  Arris Motorola NVG599. The result is native dual-stack IPv6 connectivity on a
+  router connected to a u-Verse Fiber ONT while bypassing the AT&T Residential
+  Gateway, either directly or via a managed switch.
+
+  See ${U}https://is.gd/wokixe${N} for more details on the bypass process. Also see
+  ${U}https://github.com/kangtastic/attnative6${N} for more details on this installer.
+
+  ${B}NOTE:${N} Works best if run ${B}BEFORE STARTING dibbler-client FOR THE FIRST TIME${N}.
+        (${U}If you're just generating a new helper script, disregard this.${N})
+EOF
 }
 
-conftmpl=client.conf.template
-hlptmpl=pdsplit.sh.template
-
-[ -x "$(which dibbler-client)" ] || die "dibbler-client not installed"
-[ "$(whoami)" = "root" ] || err "WARNING: NOT RUNNING AS ROOT"
-for f in $conftmpl $hlptmpl; do  [ -f $f ] || die "$f not found in current directory"; done
-
+getinterfaces() {
+msg=$(checkvars WAN LAN); ret=$?; [ $ret -eq 2 ] && return
 cat << EOF
 
-This installer generates and installs configuration files for the dibbler DHCPv6
-client that configure it to request a global unicast address ("public", semi-
-permanent IPv6 address) and a Prefix Delegation (PD) very similarly to an Arris
-Motorola NVG599.
+${B}INTERFACES${N} $msg
 
-This allows native dual-stack IPv6 connectivity on a router connected to a
-u-Verse Fiber ONT, either directly or via a managed switch, bypassing an RG.
-
-See https://is.gd/wokixe for more details on the bypass process.
-
-See https://github.com/kangtastic/attnative6 for more details on this installer.
-
-NOTE: This script is best run BEFORE STARTING dibbler-client FOR THE FIRST TIME.
-dibbler seems to ignore certain changes to its configuration otherwise.
-
-(If you are just trying to generate a new helper script, disregard this note.)
-
-Step 1) Interfaces
-Enter the names of the WAN-facing and LAN-facing interfaces on this system.
-If bypassing using an EAP proxy, the WAN-facing interface is probably named
-something like "eth0.0".
+  We need the names of the WAN-facing and LAN-facing interfaces on this system.
+  If bypassing using an EAP proxy, the WAN-facing interface is probably named
+  something like "eth0.0".
 
 EOF
-while read -p "	WAN interface name: " wan; do [ -n "$wan" ] && break; done
-while read -p "	LAN interface name: " lan; do [ -n "$lan" ] && break; done
-
+while [ -z "$WAN" ]; do ask WAN "WAN interface name"; done
+while [ -z "$LAN" ]; do ask LAN "LAN interface name"; done
+}
+getrginfo() {
+msg=$(checkvars MFG SERIAL); ret=$?; [ $ret -eq 2 ] && return
 cat << EOF
 
-Step 2) RG Information
-Enter your Residential Gateway's manufacturer and serial number.
-If the serial number contains any capital/small letters, enter them exactly.
-From this we can reconstruct the DUID-EN it sends during DHCPv6 requests.
+${B}RG INFORMATION${N} $msg
 
-(If you are just trying to generate a new helper script, it doesn't matter what
-you enter here.)
+  We need your Residential Gateway's manufacturer and serial number.
+  If the serial number contains any capital/small letters, enter them exactly.
+  From this we can reconstruct the DUID-EN to send during DHCPv6 requests.
+  (${U}If you're just generating a new helper script, it doesn't matter what you${N}
+  ${U}enter here.${N})
 
 EOF
-while read -p "	Manufacturer [1=Pace, 2=Motorola]: " mfg; do
-  ([ "$mfg" = "1" ] || [ "$mfg" = "2" ]) && break
+while ! ([ "$MFG" = "1" ] || [ "$MFG" = "2" ]); do
+  ask MFG "Manufacturer [1=Pace, 2=Motorola]"
 done
-while read -p "	Serial number: " serial; do [ -n "$serial" ] && break; done
-
+while [ -z "$SERIAL" ]; do ask SERIAL "Serial number"; done
+}
+getbindwan() {
+  msg=$(checkvars BINDWAN); ret=$?; [ $ret -eq 1 ] && return
 cat << EOF
 
-Step 3) Paths
-By default, dibbler expects its configuration files to be in "/etc/dibbler",
-and writes its logs to "/var/log/dibbler".
+${B}IPv6 ON WAN WORKAROUND${N}
 
-We will generate a configuration file for dibbler named "client.conf" and a
-helper script named "pdsplit.sh". These will go in "/etc/dibbler". The helper
-script will also save its own logs to "/var/log/dibbler".
+  The address that AT&T assigns to the WAN interface isn't enabled on their end
+  for routing to the public IPv6 Internet. (It's a /128 in 2001:506:6000::/35.)
+  As a workaround, we can bind a single address from the prefix delegation in
+  the same /64 subnet as the LAN interface to the WAN interface. (This will be
+  a /128 address in 2600:1700::/28, which AT&T has made publicly routable.)
 
-If you would like to change where the generated files will go, or where the
-helper script will save its logs, you can do so now.
-
-Just press ENTER to accept the defaults.
+  ${B}Use this workaround?${N} Just press ENTER to accept the default (no).
 
 EOF
-read -p "	dibbler config directory [default=/etc/dibbler]: " confpath
-read -p "	Helper script directory [default=/etc/dibbler]: " hlppath
-read -p "	Helper script log directory [default=/var/log/dibbler]: " logpath
-[ -z "$confpath" ] && confpath=/etc/dibbler
-[ -z "$hlppath" ] && hlppath=/etc/dibbler
-[ -z "$logpath" ] && logpath=/var/log/dibbler
-
+  while ! ([ "$BINDWAN" = "yes" ] || [ "$BINDWAN" = "no" ]);
+    do confirm BINDWAN;
+  done
+}
+getpaths() {
+  msg=$(checkvars CONFPATH HLPPATH LOGPATH); ret=$?; [ $ret -eq 3 ] && return
 cat << EOF
 
-Step 4) WAN interface PD address assignment
-Many have noticed that the address that AT&T gives you on the WAN interface
-doesn't actually give you IPv6, but addresses in the Prefix Delegation work
-fine.
+${B}PATHS${N} $msg
 
-It turns out that AT&T hasn't turned on routing on their end for the entire
-range of IPv6 addresses from which they are handing out IPv6 assignments to
-router WAN interfaces! They could at some future point, but haven't yet.
+  We will generate a configuration file and a helper script named ${U}client.conf${N}
+  and ${U}pdsplit.sh${N}, which should be installed in ${B}/etc/dibbler${N}.
 
-The logical workaround involves binding a single address from the same subnet
-being used on the LAN to the WAN interface.
+  The helper script should also write its own logs in ${B}/var/log/dibbler${N}.
 
-Insert this workaround into the helper script?
+  ${B}Change these directories?${N} Just press ENTER to accept the defaults.
 
 EOF
-bindwan=no; confirm && bindwan=yes
-
+  while [ -z "$CONFPATH" ]; do
+    ask CONFPATH "Config file directory [default=/etc/dibbler]" /etc/dibbler
+  done
+  while [ -z "$HLPPATH" ]; do
+    ask HLPPATH "Helper script directory [default=/etc/dibbler]" /etc/dibbler
+  done
+  while [ -z "$LOGPATH" ]; do
+    ask LOGPATH "Helper script log directory [default=/var/log/dibbler]" /var/log/dibbler
+  done
+}
+getinstall() {
+  msg=$(checkvars INSTC INSTH CLRDB); ret=$?; [ $ret -eq 3 ] && return
 cat << EOF
 
-Step 5) Confirm
-Please confirm that the information below is correct, or the script will quit.
-
+${B}INSTALL OPTIONS${N} $msg
 EOF
-echo "	WAN interface: $wan"
-echo "	LAN interface: $lan"
-echo
-echo "	RG manufacturer: $([ $mfg = 1 ] && echo Pace || echo Motorola)"
-echo "	RG serial number: $serial"
-echo
-echo "	Additional address on WAN interface from PD: $bindwan"
-echo
-echo "	dibbler configuration file directory: $confpath"
-echo "	Helper script directory: $hlppath"
-echo "	Helper script log directory: $logpath"
-echo
-confirm || die "User canceled"
-
-conf=$(echo $conftmpl | sed 's|.template||')
-hlp=$(echo $hlptmpl | sed 's|.template||')
-
+  if ([ -z "$INSTC" ] || [ -z "$INSTH" ]); then
 cat << EOF
 
-Step 6) Generate and install
-We will try to generate a new configuration for dibbler-client, close any
-running instances, delete the client's current lease database, and install the
-generated configuration file and helper script.
-
-(If you are just trying to generate a new helper script, don't delete the lease
-database and don't install client.conf.)
+  We can install the configuration file and the helper script. (${U}If you're just${N}
+  ${U}generating a new helper script, don't install client.conf.${N})
 
 EOF
-[ "$mfg" = "1" ] && mfg="00D09E" || mfg="001E46"
-duiden=$(ascii2hex "$mfg-$serial"); duiden="0x$duiden"
-
-for f in $conftmpl $hlptmpl; do
-  of=$(echo $f | sed 's|.template||')
-  cp $f $of &&
-  sed -s "s|__INSTALLERPATH__|$(readlink -f $0)|" -i.bak $of &&
-  sed -e "s|__DATE__|$(date -R)|" -i.bak $of &&
-  sed -e "s|__WAN__|$wan|" -i.bak $of &&
-  sed -e "s|__LAN__|$lan|" -i.bak $of &&
-  sed -e "s|__DUIDEN__|$duiden|" -i.bak $of &&
-  sed -e "s|__CONFPATH__|$confpath|" -i.bak $of &&
-  sed -e "s|__HLPPATH__|$hlppath|" -i.bak $of &&
-  sed -e "s|__LOGPATH__|$logpath|" -i.bak $of &&
-  sed -e "s|__BINDWAN__|$bindwan|" -i.bak $of &&
-  rm $of.bak &&
-  echo "	$of generated." || die "	$of could not be generated."
-done
-echo
-
-if [ -n "$(pgrep dibbler-client)" ]; then
-  echo "dibbler-client is running, killing it now."
-  echo "This should also release the DHCPv6 assignments it has, if any."
-  killall dibbler-client || err "Could not kill dibbler-client!"
-  echo
-fi
-if [ -f /var/lib/dibbler/client-duid ]; then
-cat << EOF
-Clear dibbler-client's DHCPv6 lease database? It seems you've run it already.
-This is probably necessary, unless you already have IPv6 (possibly through this
-installer script).
-
-Technical reason: If dibbler-client has already generated a DUID-LLT from your
-MAC address, it stores it in the lease database, even without any leases, and
-ignores a DUID-EN configured in client.conf.
-
-EOF
-  if confirm; then
-    rm -f /var/lib/dibbler/client* || err "Failed, are you root?"
+    [ -z "$INSTC" ] && echo "  ${B}Install ${U}client.conf${N}${B} (the config file) into ${U}${CONFPATH}${N}${B}?"
+    while [ -z "$INSTC" ]; do confirm INSTC; done
+    [ -z "$INSTH" ] && echo "  ${B}Install ${U}pdsplit.sh${N}${B} (the helper script) into ${U}${HLPPATH}${N}${B}?"
+    while [ -z "$INSTH" ]; do confirm INSTH; done
   fi
-  echo
-fi
+  if [ -f /var/lib/dibbler/client-duid ]; then
+cat << EOF
 
-echo "Install $conf (the config file) into $confpath?"
-echo
-if confirm; then
-  mkdir -p "$confpath" && mv $conf "$confpath" || err "Failed, are you root?"
-fi
-echo
+  ${B}dibbler-client${N} has already run and created a DHCPv6 lease database. Clearing
+  it is probably necessary, unless you got IPv6 while bypassed because of this
+  installer. (${U}If you're just generating a new helper script, don't clear${N}
+  ${U}the database.${N})
 
-chmod +x $hlp
-echo "Install $hlp (the helper script) into $hlppath?"
-echo
-if confirm; then
-  mkdir -p "$ hlppath" && mv $hlp "$hlppath" || err "Failed, are you root?"
-fi
+  Technical reason: ${B}dibbler-client${N} generated a DUID-LLT from your MAC address
+  and stored it in the lease database, even without receiving any leases. Sadly,
+  the new DUID-EN we generate and insert into ${B}client.conf${N} will then be ignored.
+
+  ${B}Clear dibbler-client's DHCPv6 lease database?${N}
+
+EOF
+    while [ -z "$CLRDB" ]; do confirm CLRDB; done
+  fi
+}
+printsummary() {
+cat << EOF
+
+${B}SUMMARY${N}
+
+    WAN interface                   ${B}$WAN${N}
+    LAN interface                   ${B}$LAN${N}
+
+    RG manufacturer                 ${B}$([ $MFG = 1 ] && echo Pace || echo Motorola)${N}
+    RG serial number                ${B}$SERIAL${N}
+
+    Bind address from PD to WAN     ${B}$BINDWAN${N}
+
+    Configuration file directory    ${B}$CONFPATH${N}
+    Helper script directory         ${B}$HLPPATH${N}
+    Helper script log directory     ${B}$LOGPATH${N}
+
+    Install configuration file      ${B}$INSTC${N}
+    Install helper script           ${B}$INSTH${N}
+
+    Clear dibbler's lease database  ${B}$CLRDB${N}
+EOF
+}
+generate() {
+  from_template() {
+    f="$1"; of="$2"
+    cp $f $of &&
+    sed -s "s|__INSTALLERPATH__|$(readlink -f $INSTALLERPATH)|" -i.bak $of &&
+    sed -e "s|__DATE__|$(date -R)|" -i.bak $of &&
+    sed -e "s|__WAN__|$WAN|" -i.bak $of &&
+    sed -e "s|__LAN__|$LAN|" -i.bak $of &&
+    sed -e "s|__DUIDEN__|$DUIDEN|" -i.bak $of &&
+    sed -e "s|__CONFPATH__|$CONFPATH|" -i.bak $of &&
+    sed -e "s|__HLPPATH__|$HLPPATH|" -i.bak $of &&
+    sed -e "s|__LOGPATH__|$LOGPATH|" -i.bak $of &&
+    sed -e "s|__BINDWAN__|$BINDWAN|" -i.bak $of &&
+    rm $of.bak || return 1
+  }
+  [ "$MFG" = "1" ] && MFG="00D09E" || MFG="001E46"
+  DUIDEN=$(ascii2hex "$MFG-$SERIAL") && DUIDEN="0x$DUIDEN"
+
+  conf=$(echo $CONFTMPL | sed 's|.template||')
+  hlp=$(echo $HLPTMPL | sed 's|.template||')
+
+  from_template $CONFTMPL $conf && s_conf="Success" || s_conf="Failure"
+  from_template $HLPTMPL $hlp && s_hlp="Success" || s_hlp="Failure"
 
 cat << EOF
 
-Step 7) Finished.
+${B}GENERATE${N}
 
-Run 'systemctl restart dibbler-client' as root to start or restart the client.
+    Configuration file (client.conf)  ${B}$s_conf${N}
+    Helper script (pdsplit.sh)        ${B}$s_hlp${N}
+EOF
+
+[ "$s_conf" = "Success" ] && [ "$s_hlp" = "Success" ] || return 1
+}
+install() {
+  INST="no"
+  for v in INSTC INSTH CLRDB; do
+    val=$(eval echo \$$v); [ "$val" = "yes" ] && INST="yes"
+  done
+  [ "$INST" = "no" ] && return
+  # Status of overall installation and subprocedures
+  s_inst="Success"
+  for v in s_kill s_instc s_insth s_clear; do
+    eval $v="Failed"
+  done
+
+  if [ -n "$(pgrep dibbler-client)" ]; then
+    killall dibbler-client && s_kill="Success"
+  else
+    s_kill="N/A"
+  fi
+  if [ "$INSTC" = "yes" ]; then
+    mkdir -p "$CONFPATH" && mv $conf "$CONFPATH" && s_instc="Success"
+  else
+    s_instc="N/A"
+  fi
+  if [ "$INSTH" = "yes" ] && chmod +x $hlp; then
+    mkdir -p "$HLPPATH" && mv $hlp "$HLPPATH" && s_insth="Success"
+  else
+    s_insth="N/A"
+  fi
+  if [ -f /var/lib/dibbler/client-duid ] && [ "$CLRDB" = "yes" ]; then
+    rm -f /var/lib/dibbler/client* && s_clear="Success"
+  else
+    s_clear="N/A"
+  fi
+
+  for v in s_kill s_instc s_insth s_clear; do
+    val=$(eval echo \$$v); [ "$val" = "Failed" ] && s_inst="Failed"
+  done
+
+cat << EOF
+
+${B}RESULTS${N}
+
+    Kill running instances of dibbler-client  ${B}$s_kill${N}
+    Install configuration file                ${B}$s_instc${N}
+    Install helper script                     ${B}$s_insth${N}
+    Clear dibbler's lease database            ${B}$s_clear${N}
+EOF
+
+  [ "$s_inst" = "Success" ] || return 1
+}
+### MAIN ###
+# Options #
+OPTS=$(getopt -o hw:l:m:s:qbic --long help,wan:,lan:,mfg:,serial:,quiet,bind-wan,conf-path:,hlp-path:,log-path:,install,install-conf,install-hlp,clear-leases -n 'parse-options' -- "$@")
+[ $? != 0 ] && err "Failed to parse some options; ignoring"
+# debug
+#echo "$OPTS"
+eval set -- "$OPTS"
+
+while true; do
+  case "$1" in
+  -h | --help )         help; exit 0 ;;
+  -w | --wan )          WAN="$2"; shift; shift ;;
+  -l | --lan )          LAN="$2"; shift; shift ;;
+  -m | --mfg )
+    if [ "$2" = "pace" ] || [ "$2" = "1" ]; then MFG=1
+    elif [ "$2" = "motorola" ] || [ "$2" = "2" ]; then MFG=2
+    else die "-m/--mfg: failed to parse argument '$2'" "y"; fi; shift; shift ;;
+  -s | --serial )       SERIAL="$2"; shift; shift ;;
+  -q | --quiet )        QUIET=yes; shift ;;
+  -b | --bind-wan )     BINDWAN=yes; shift ;;
+  --conf-path )         CONFPATH="$2"; shift; shift ;;
+  --hlp-path )          HLPPATH="$2"; shift; shift ;;
+  --log-path )          LOGPATH="$2"; shift; shift ;;
+  -i | --install )      INSTC=yes; INSTH=yes; shift ;;
+  --install-conf )      INSTC=yes; shift ;;
+  --install-hlp )       INSTH=yes; shift ;;
+  -c | --clear-leases ) CLRDB=yes; shift ;;
+  -- )                  shift; break ;;
+  * )                   break ;;
+  esac
+done
+
+# Sanity checks #
+for f in $CONFTMPL $HLPTMPL; do [ -f $f ] || die "$f not found in $PWD"; done
+
+[ -x "$(which dibbler-client)" ] && [ "$(whoami)" = "root" ] && ALLOWINST=yes
+if [ "$ALLOWINST" != "yes" ]; then
+  for v in INSTC INSTH CLRDB; do eval $v=disabled; done
+  err "Not root, or dibbler-client not found; installation functions disabled."
+fi
+
+## Run parts ##
+[ "$QUIET" != "yes" ] && printinfo
+getinterfaces; getrginfo
+[ "$QUIET" != "yes" ] && getbindwan && getpaths && getinstall
+
+# Set defaults for any options that are still empty #
+[ -z "$BINDWAN" ] && BINDWAN=no
+[ -z "$CONFPATH" ] && CONFPATH=/etc/dibbler
+[ -z "$HLPPATH" ] && HLPPATH=/etc/dibbler
+[ -z "$LOGPATH" ] && LOGPATH=/var/log/dibbler
+for v in INSTC INSTH CLRDB; do [ -z "$(eval echo \$$v)" ] && eval $v=no; done
+
+printsummary
+
+# Point of no return #
+if [ "$QUIET" != "yes" ]; then
+cat << EOF
+  ${B}Please confirm that the above summary is correct, or this installer will quit.${N}
+
+EOF
+  confirm trigger; [ "$trigger" = "no" ] && echo && err "User quit." && exit
+fi
+
+generate || die "Failed during generation step."
+install || die "Failed during installation step."
+
+cat << EOF
+
+Finished.
+
+(Run 'systemctl restart dibbler-client' as root to start or restart the client
+on a reasonably recent Linux.)
 
 EOF
