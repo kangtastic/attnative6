@@ -59,7 +59,7 @@ replace_lan_gua() {
     log "$msg" 1
   else
     ip -6 addr flush dev $LAN scope global &&
-    ip -6 addr add $GUA64 $LAN && log "$msg" 2 || die "$msg"
+    ip -6 addr add $GUA64 dev $LAN && log "$msg" 2 || die "$msg"
   fi
 }
 # If 2600:1700:xxx0:xxx0::1/128 is not bound to WAN, add it.
@@ -68,7 +68,7 @@ add_wan_gua() {
   if ip -6 -br addr show dev $IFACE | grep -q $GUA128; then
     log "$msg" 1
   else
-    ip -6 addr add $GUA128 $IFACE && log "$msg" 2 || die "$msg"
+    ip -6 addr add $GUA128 dev $IFACE && log "$msg" 2 || die "$msg"
   fi
 }
 fixup_default_route() {
